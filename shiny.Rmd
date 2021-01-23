@@ -1,0 +1,199 @@
+---
+title: "Sentimen Analysis Game GTA"
+output: html_document
+runtime: shiny
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  message = FALSE, 
+  warning = FALSE,
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+Deklarasi Library
+
+```{r}
+library(shiny)
+library(shinydashboard)
+library(tm)
+library(SnowballC)
+library(wordcloud)
+library(RColorBrewer)
+library(stringr)
+library(vroom)
+library(here)
+library(tidytext)
+library(topicmodels)
+library(dplyr)
+library(ggplot2)
+library(plyr)
+library(plotly)
+```
+
+Pemanggilan Data yang sudah Dibersihkan
+
+```{r}
+setwd("F:\\Informatika\\Semester 5\\2. Prak DS\\..Project Akhir")
+docss <-read.csv("grand-theft-auto-v setealh dibersihkan.csv",header=TRUE)
+```
+
+**`global`**
+
+```{r global}
+docs <- Corpus(VectorSource(docss$Comentar))
+
+inspect(docs)
+
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+docs <- tm_map(docs, toSpace, "/")
+docs <- tm_map(docs, toSpace, "@")
+docs <- tm_map(docs, toSpace, "\\|")
+
+corpus_docs <- docs %>%
+  tm_map(content_transformer(tolower)) %>% 
+  tm_map(removePunctuation) %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removeWords, stopwords(kind="en")) %>%
+  tm_map(stripWhitespace)
+
+myStopwords = readLines("F:\\Informatika\\Semester 5\\2. Prak DS\\..Project Akhir\\stopword_en.csv")
+
+docs <- tm_map(docs, removeWords, myStopwords)
+
+docs <- tm_map(docs, stripWhitespace)
+
+docs <- tm_map(docs, gsub, pattern="Howver", replacement="However")
+
+dtm <- TermDocumentMatrix(docs)
+m <- as.matrix(dtm)
+v <- sort(rowSums(m),decreasing=TRUE)
+d <- data.frame(word = names(v),freq=v)
+head(d, 15)
+
+set.seed(1234)
+wordcloud(words = d$word, freq = d$freq, min.freq = 1,
+          max.words=50, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+
+
+dataframe<-data.frame(text=unlist(sapply(docs, `[`)), stringsAsFactors=F)
+
+kalimat2<-dataframe
+
+positif <- scan("F:\\Informatika\\Semester 5\\2. Prak DS\\..Project Akhir\\positive-words.txt",what="character",comment.char=";")
+negatif <- scan("F:\\Informatika\\Semester 5\\2. Prak DS\\..Project Akhir\\negative-words.txt",what="character",comment.char=";")
+kata.positif = c(positif, "is near to")
+kata.negatif = c(negatif, "cant")
+score.sentiment = function(kalimat2, kata.positif, kata.negatif, .progress='none')
+{
+  require(plyr)
+  require(stringr)
+  scores = laply(kalimat2, function(kalimat, kata.positif, kata.negatif) {
+    kalimat = gsub('[[:punct:]]', '', kalimat)
+    kalimat = gsub('[[:cntrl:]]', '', kalimat)
+    kalimat = gsub('\\d+', '', kalimat)
+    kalimat = tolower(kalimat)
+    
+    list.kata = str_split(kalimat, '\\s+')
+    kata2 = unlist(list.kata)
+    positif.matches = match(kata2, kata.positif)
+    negatif.matches = match(kata2, kata.negatif)
+    positif.matches = !is.na(positif.matches)
+    negatif.matches = !is.na(negatif.matches)
+    score = sum(positif.matches) - (sum(negatif.matches))
+    return(score)
+  }, kata.positif, kata.negatif, .progress=.progress )
+  scores.df = data.frame(score=scores, text=kalimat2)
+  return(scores.df)
+}
+
+hasil = score.sentiment(kalimat2$text, kata.positif, kata.negatif)
+
+hasil$klasifikasi<- ifelse(hasil$score<0, "Negatif",ifelse(hasil$score==0,"Netral","Positif"))
+hasil$klasifikasi
+
+data <- hasil[c(3,1,2)]
+
+option_klasifikasi <- unique(data[["klasifikasi"]])
+
+```
+
+**`ui`**
+
+```{r ui}
+
+dashboardPage(
+  dashboardHeader(),
+  dashboardSidebar(),
+  dashboardBody()
+)
+
+```
+
+**`run-app`**
+
+```{r run-app}
+
+ui <- dashboardPage(
+  dashboardHeader(title = "Sentimen Analisis"),
+  dashboardSidebar(
+    sidebarMenu(
+      menuItem("Proses Sentimen", tabName = "Proses", icon = icon("dashboard")),
+      menuItem("Hasil Sentimen", tabName = "Hasil", icon = icon("th"))
+    )
+  ),
+  dashboardBody(
+    tabItems(
+      # First tab content
+      tabItem(tabName = "Proses",
+          ui <- fluidPage(
+            title = "Proses Sentimen",
+            headerPanel("HASIL"),
+            sidebarLayout(
+              sidebarPanel(
+                selectInput(inputId = "klasifikasi",
+                            label =  "Klasifikasi",
+                            choices = option_klasifikasi,
+                            selected = option_klasifikasi[[1]]),
+              ),
+      
+      # Second tab content
+        tabItem(tabName = "Hasil",
+                )
+            )
+          ),
+          mainPanel(
+          plotlyOutput(outputId = "aq_plot")
+        )
+      )
+    )   
+  )
+)
+server <- function(input, output, session) {
+  aq_plot <- reactive({
+    data %>%
+      filter(klasifikasi %in% input$klasifikasi) %>% 
+      top_n(10, score) %>% 
+      ggplot(aes(x = text, y = score)) +
+      geom_col() +
+      coord_flip() +
+      labs(
+        x = "",
+        y = "Score",
+        title = "10 Rating Score"
+      ) +
+      theme_light()
+  })
+  
+  output$aq_plot <- renderPlotly({
+    ggplotly(aq_plot())
+  })
+}
+
+shinyApp(ui, server)
+```
+
+> Selamat Anda telah menyelesaikan modul shiny! Silakan jalankan "Ctrl + Shift + K" atau klik tombol "Knit" untuk membuat dokumen final.
